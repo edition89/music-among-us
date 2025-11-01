@@ -137,3 +137,8 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+public/sounds/crewmate_backup
+public/sounds/crewmate/*
+public/sounds/impostor_backup
+public/sounds/impostor/*
