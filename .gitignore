@@ -142,3 +142,5 @@ public/sounds/crewmate_backup
 public/sounds/crewmate/*
 public/sounds/impostor_backup
 public/sounds/impostor/*
+!public/sounds/crewmate/.gitkeep
+!public/sounds/impostor/.gitkeep
