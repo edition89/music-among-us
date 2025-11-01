@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Музыкальный Among Us</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+    <div class="page-container">
+        <div class="main-container">
+            <h1>🎵 Музыкальный Among Us</h1>
+
+            <div class="main-menu">
+                <div class="button-group-vertical">
+                    <button id="createRoomBtn" class="btn btn-primary">Создать комнату</button>
+                    <button id="joinRoomBtn" class="btn btn-secondary">Подключиться к комнате</button>
+                </div>
+
+                <div id="createRoomForm" class="form-container hidden">
+                    <h3>Создание комнаты</h3>
+                    <input type="text" id="playerNameCreate" placeholder="Ваше имя" maxlength="15" required>
+                    <button id="createRoomConfirm" class="btn btn-primary">Создать комнату</button>
+                </div>
+
+                <div id="joinRoomForm" class="form-container hidden">
+                    <h3>Подключение к комнате</h3>
+                    <input type="text" id="joinRoomPassword" placeholder="Пароль комнаты (4 символа)" required
+                        maxlength="4" pattern="[A-Z0-9]{4}">
+                    <input type="text" id="playerNameJoin" placeholder="Ваше имя" maxlength="15">
+                    <button id="joinRoomConfirm" class="btn btn-primary">Подключиться</button>
+                </div>
+            </div>
+
+            <div id="errorMessage" class="error-message hidden"></div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/main.js"></script>
+</body>
+
+</html>

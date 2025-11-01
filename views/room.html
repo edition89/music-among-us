@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Комната - Музыкальный Among Us</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+    <div class="page-container">
+        <div class="main-container">
+            <div class="room-header">
+                <h1>🎵 Комната <span id="roomTitle"></span></h1>
+                <button id="goHome" class="btn btn-secondary">На главную</button>
+            </div>
+
+            <div class="room-info">
+                <p>Пароль комнаты: <span class="room-password" id="roomPasswordDisplay"></span></p>
+                <p>Игроков: <span id="playersCount">0</span>/<span id="maxPlayers">2</span></p>
+                <p>Готовы: <span id="readyCount">0</span></p>
+            </div>
+
+            <div class="players-list">
+                <h3>Игроки в комнате:</h3>
+                <div id="playersContainer" class="players-container">
+                    <div class="no-players">Игроки подключаются...</div>
+                </div>
+            </div>
+
+            <div class="game-controls">
+                <button id="readyBtn" class="btn btn-ready">✅ Готов</button>
+                <button id="unreadyBtn" class="btn btn-unready hidden">❌ Отмена</button>
+            </div>
+
+            <!-- Блок голосования -->
+            <div id="votingSection" class="voting-section hidden">
+                <h3>🗳️ Голосование: Кто был предателем?</h3>
+                <div id="votingPlayers" class="voting-players"></div>
+                <div id="votingStatus" class="voting-status"></div>
+            </div>
+
+            <!-- Блок результатов -->
+            <div id="resultsSection" class="results-section hidden">
+                <h3>🏁 Результаты голосования</h3>
+                <div id="resultsContent"></div>
+                <button id="nextRoundBtn" class="btn btn-primary">Следующий раунд</button>
+            </div>
+
+            <div id="gameStatus" class="game-status"></div>
+
+            <audio id="gameAudio" preload="auto"></audio>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/room.js"></script>
+</body>
+
+</html>
