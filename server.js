@@ -28,6 +28,49 @@ const rooms = new Map();
 // Хранилище связей socket.id -> roomId
 const socketToRoom = new Map();
 
+// --- Валидация и защита от злоупотреблений ---
+
+const MAX_NAME_LENGTH = 15;
+const ROOM_PASSWORD_PATTERN = /^[A-Z0-9]{4}$/;
+const ROOM_ID_PATTERN = new RegExp(`^[A-Z0-9]{${ROOM_ID_LENGTH}}$`);
+
+// Убираем управляющие символы и обрезаем длину имени игрока.
+// От XSS клиент защищается экранированием при рендере, но и на сервере
+// не помешает не хранить откровенно "грязные" значения.
+function sanitizePlayerName(rawName) {
+  if (typeof rawName !== "string") return null;
+  const cleaned = rawName
+    .replace(/[\x00-\x1F\x7F<>]/g, "")
+    .trim()
+    .slice(0, MAX_NAME_LENGTH);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function isValidRoomId(roomId) {
+  return typeof roomId === "string" && ROOM_ID_PATTERN.test(roomId);
+}
+
+function isValidRoomPassword(password) {
+  return typeof password === "string" && ROOM_PASSWORD_PATTERN.test(password);
+}
+
+// Простой rate-limit попыток подключения к комнате по паролю:
+// не более JOIN_ATTEMPT_LIMIT попыток за JOIN_ATTEMPT_WINDOW_MS на сокет,
+// чтобы затруднить подбор 4-символьного пароля.
+const JOIN_ATTEMPT_LIMIT = 10;
+const JOIN_ATTEMPT_WINDOW_MS = 10000;
+const joinAttempts = new Map(); // socket.id -> [timestamps]
+
+function isRateLimited(socketId) {
+  const now = Date.now();
+  const attempts = (joinAttempts.get(socketId) || []).filter(
+    (ts) => now - ts < JOIN_ATTEMPT_WINDOW_MS
+  );
+  attempts.push(now);
+  joinAttempts.set(socketId, attempts);
+  return attempts.length > JOIN_ATTEMPT_LIMIT;
+}
+
 // Генерация ID комнаты
 function generateRoomId() {
   return Math.random()
@@ -61,7 +104,15 @@ io.on("connection", (socket) => {
 
   // Обработчик для идентификации комнаты при загрузке страницы комнаты
   socket.on("identify-room", (data) => {
-    const { roomId, playerName } = data;
+    const roomId = data && data.roomId;
+    const playerName = sanitizePlayerName(data && data.playerName);
+
+    if (!isValidRoomId(roomId)) {
+      console.log("❌ Invalid roomId in identify-room:", roomId);
+      socket.emit("error", "Комната не найдена");
+      return;
+    }
+
     console.log(
       `🔍 Identifying room for socket ${socket.id}: ${roomId}, name: ${playerName}`
     );
@@ -120,7 +171,8 @@ io.on("connection", (socket) => {
 
   // Создание комнаты
   socket.on("create-room", (data) => {
-    console.log("🎮 Creating room for player:", data.playerName);
+    const playerName = sanitizePlayerName(data && data.playerName);
+    console.log("🎮 Creating room for player:", playerName);
 
     if (!soundScanner.hasSounds()) {
       socket.emit("error", "Игра готовится");
@@ -146,7 +198,7 @@ io.on("connection", (socket) => {
     // Добавляем создателя в комнату
     const player = {
       id: socket.id,
-      name: data.playerName || `Player1`,
+      name: playerName || `Player1`,
       isReady: false,
       role: "crewmate",
       hasVoted: false,
@@ -186,9 +238,26 @@ io.on("connection", (socket) => {
 
   // Подключение к комнате
   socket.on("join-room", (data) => {
-    const { roomPassword, playerName } = data;
+    const roomPassword =
+      data && typeof data.roomPassword === "string"
+        ? data.roomPassword.toUpperCase().trim()
+        : "";
+    const playerName = sanitizePlayerName(data && data.playerName);
 
     console.log("🔗 Join room attempt:", { roomPassword, playerName });
+
+    // Защита от подбора пароля: ограничиваем частоту попыток на сокет
+    if (isRateLimited(socket.id)) {
+      console.log("⛔ Rate limit exceeded for join-room:", socket.id);
+      socket.emit("error", "Слишком много попыток, подождите немного");
+      return;
+    }
+
+    if (!isValidRoomPassword(roomPassword)) {
+      console.log("❌ Invalid room password format:", roomPassword);
+      socket.emit("error", "Комната не найдена");
+      return;
+    }
 
     if (!soundScanner.hasSounds()) {
       socket.emit("error", "Игра готовится");
@@ -474,6 +543,9 @@ io.on("connection", (socket) => {
   // Отключение игрока
   socket.on("disconnect", () => {
     console.log("❌ User disconnected:", socket.id);
+
+    // Чистим счётчик попыток подключения, чтобы не копить память
+    joinAttempts.delete(socket.id);
 
     const roomId = socketToRoom.get(socket.id);
     if (roomId) {

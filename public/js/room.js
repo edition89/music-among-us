@@ -126,8 +126,8 @@ function createVotingInterface(players) {
   let html = "";
   players.forEach((player) => {
     html += `
-            <button class="btn btn-vote" data-player-id="${player.id}">
-                ${player.name}
+            <button class="btn btn-vote" data-player-id="${escapeHtml(player.id)}">
+                ${escapeHtml(player.name)}
             </button>
         `;
   });
@@ -360,6 +360,14 @@ function updateReadyButtons() {
   }
 }
 
+// Экранирование пользовательского ввода перед вставкой в innerHTML,
+// чтобы имя игрока не могло исполнить произвольный HTML/JS (XSS).
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = value == null ? "" : String(value);
+  return div.innerHTML;
+}
+
 function updatePlayersList(players) {
   const container = document.getElementById("playersContainer");
 
@@ -377,39 +385,13 @@ function updatePlayersList(players) {
 
     html += `
             <div class="player-item">
-                <span style="font-weight: bold;">${player.name}</span>
+                <span style="font-weight: bold;">${escapeHtml(player.name)}</span>
                 <span class="${statusClass}">${statusText}</span>
             </div>
         `;
   });
 
   container.innerHTML = html;
-}
-
-function createVotingInterface(players) {
-  const votingContainer = document.getElementById("votingPlayers");
-  const statusContainer = document.getElementById("votingStatus");
-
-  let html = "";
-  players.forEach((player) => {
-    html += `
-            <button class="btn btn-vote" data-player-id="${player.id}">
-                ${player.name}
-            </button>
-        `;
-  });
-
-  votingContainer.innerHTML = html;
-  statusContainer.textContent = "Выберите, кто по вашему мнению был предателем";
-
-  // Добавляем обработчики для кнопок голосования
-  document.querySelectorAll(".btn-vote").forEach((button) => {
-    button.addEventListener("click", (e) => {
-      const votedPlayerId = e.target.getAttribute("data-player-id");
-      console.log("🗳️ Voting for player:", votedPlayerId);
-      socket.emit("vote-impostor", { roomId, votedPlayerId });
-    });
-  });
 }
 
 function updateVotingStatus(data) {
@@ -455,7 +437,7 @@ function showVotingResults(data) {
       if (voteInfo) {
         const votedPlayer = players.find((p) => p.id === voteInfo.votedFor);
         if (votedPlayer) {
-          resultsHtml += `<p><strong>${voteInfo.voterName}</strong> → ${votedPlayer.name}</p>`;
+          resultsHtml += `<p><strong>${escapeHtml(voteInfo.voterName)}</strong> → ${escapeHtml(votedPlayer.name)}</p>`;
         }
       }
     });
@@ -467,7 +449,7 @@ function showVotingResults(data) {
     resultsHtml += `
             <div class="result-tie">
                 <h4>🤔 Ничья!</h4>
-                <p>Голоса разделились, предателем был <strong>${data.actualImpostor.name}</strong></p>
+                <p>Голоса разделились, предателем был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
                 <p>Никто не был исключен</p>
             </div>
         `;
@@ -477,7 +459,7 @@ function showVotingResults(data) {
     resultsHtml += `
             <div class="result-success">
                 <h4>🎉 Правильно!</h4>
-                <p>Команда угадала! Предателем действительно был <strong>${data.actualImpostor.name}</strong></p>
+                <p>Команда угадала! Предателем действительно был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
                 <p>Предатель исключен!</p>
             </div>
         `;
@@ -487,7 +469,7 @@ function showVotingResults(data) {
     resultsHtml += `
             <div class="result-fail">
                 <h4>❌ Неправильно!</h4>
-                <p>Команда проголосовала за <strong>${data.suspectedImpostor.name}</strong>, но предателем был <strong>${data.actualImpostor.name}</strong></p>
+                <p>Команда проголосовала за <strong>${escapeHtml(data.suspectedImpostor.name)}</strong>, но предателем был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
                 <p>Невиновный исключен!</p>
             </div>
         `;
