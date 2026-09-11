@@ -1,5 +1,20 @@
 const socket = io();
 
+// Постоянный на вкладку идентификатор сессии игрока. Нужен серверу, чтобы
+// при переходе с главной страницы в комнату (новое socket.io-соединение)
+// не создавать дубликат игрока, а заменить его старую запись.
+function getOrCreatePlayerSessionId() {
+  let sessionId = sessionStorage.getItem("playerSessionId");
+  if (!sessionId) {
+    sessionId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem("playerSessionId", sessionId);
+  }
+  return sessionId;
+}
+
 document.getElementById("createRoomBtn").addEventListener("click", () => {
   document.getElementById("createRoomForm").classList.remove("hidden");
   document.getElementById("joinRoomForm").classList.add("hidden");
@@ -24,7 +39,10 @@ document.getElementById("createRoomConfirm").addEventListener("click", () => {
   sessionStorage.setItem("playerName", playerName);
 
   console.log("🎮 Creating room for player:", playerName);
-  socket.emit("create-room", { playerName });
+  socket.emit("create-room", {
+    playerName,
+    sessionId: getOrCreatePlayerSessionId(),
+  });
 });
 
 document.getElementById("joinRoomConfirm").addEventListener("click", () => {
@@ -55,7 +73,11 @@ document.getElementById("joinRoomConfirm").addEventListener("click", () => {
     "Player:",
     playerName
   );
-  socket.emit("join-room", { roomPassword: password, playerName });
+  socket.emit("join-room", {
+    roomPassword: password,
+    playerName,
+    sessionId: getOrCreatePlayerSessionId(),
+  });
 });
 
 // Обработка нажатия Enter в формах
@@ -114,12 +136,29 @@ socket.on("error", (message) => {
   showError(message);
 });
 
+const ERROR_DISPLAY_MS = 8000; // время показа ошибки
+const ERROR_FADE_MS = 400; // должно совпадать с transition в style.css
+
 function showError(message) {
   const errorDiv = document.getElementById("errorMessage");
+
+  // Если предыдущая ошибка ещё показывается/скрывается — сбрасываем её таймеры,
+  // чтобы новая ошибка не исчезла раньше времени и анимация не "дёргалась".
+  clearTimeout(errorDiv._hideTimeout);
+  clearTimeout(errorDiv._removeTimeout);
+
   errorDiv.textContent = message;
   errorDiv.classList.remove("hidden");
 
-  setTimeout(() => {
-    errorDiv.classList.add("hidden");
-  }, 5000);
+  // Форсируем перерасчёт стилей, чтобы transition сработал даже если
+  // блок уже был видим (например, показываем вторую ошибку подряд).
+  void errorDiv.offsetWidth;
+  errorDiv.classList.add("show");
+
+  errorDiv._hideTimeout = setTimeout(() => {
+    errorDiv.classList.remove("show");
+    errorDiv._removeTimeout = setTimeout(() => {
+      errorDiv.classList.add("hidden");
+    }, ERROR_FADE_MS);
+  }, ERROR_DISPLAY_MS);
 }

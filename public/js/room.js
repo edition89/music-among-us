@@ -16,6 +16,21 @@ function getPlayerName() {
   );
 }
 
+// Тот же постоянный на вкладку идентификатор сессии, что и на главной
+// странице (main.js) — используется сервером для замены "призрачной"
+// записи игрока под старым socket.id вместо создания дубликата.
+function getOrCreatePlayerSessionId() {
+  let sessionId = sessionStorage.getItem("playerSessionId");
+  if (!sessionId) {
+    sessionId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem("playerSessionId", sessionId);
+  }
+  return sessionId;
+}
+
 console.log("🔗 Loading room:", roomId);
 
 // Получаем информацию о комнате при загрузке
@@ -29,20 +44,21 @@ document.addEventListener("DOMContentLoaded", () => {
   setupReadyButtons();
   setupVotingButtons();
 
-  // Получаем имя игрока
+  // Получаем имя игрока и постоянный ID сессии этой вкладки
   const playerName = getPlayerName();
-  console.log("👤 Player name:", playerName);
+  const sessionId = getOrCreatePlayerSessionId();
+  console.log("👤 Player name:", playerName, "session:", sessionId);
 
   // Сразу идентифицируемся с комнатой
   console.log("🔍 Immediately identifying with room:", roomId);
-  socket.emit("identify-room", { roomId, playerName });
+  socket.emit("identify-room", { roomId, playerName, sessionId });
 
   // Дополнительная идентификация через небольшой промежуток
   const identificationAttempts = [100, 500, 1000, 2000];
   identificationAttempts.forEach((delay) => {
     setTimeout(() => {
       console.log(`🔍 Retry identifying with room (${delay}ms):`, roomId);
-      socket.emit("identify-room", { roomId, playerName });
+      socket.emit("identify-room", { roomId, playerName, sessionId });
     }, delay);
   });
 
@@ -317,9 +333,10 @@ socket.on("error", (message) => {
   // Если ошибка "Комната не найдена", пробуем переидентифицироваться
   if (message === "Комната не найдена") {
     const playerName = getPlayerName();
+    const sessionId = getOrCreatePlayerSessionId();
     console.log("🔄 Retrying room identification...");
     setTimeout(() => {
-      socket.emit("identify-room", { roomId, playerName });
+      socket.emit("identify-room", { roomId, playerName, sessionId });
     }, 500);
   }
 

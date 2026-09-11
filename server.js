@@ -40,7 +40,7 @@ const ROOM_ID_PATTERN = new RegExp(`^[A-Z0-9]{${ROOM_ID_LENGTH}}$`);
 function sanitizePlayerName(rawName) {
   if (typeof rawName !== "string") return null;
   const cleaned = rawName
-    .replace(/[\x00-\x1F\x7F<>]/g, "")
+    .replace(/[\x00-\x1F\x7F]/g, "")
     .trim()
     .slice(0, MAX_NAME_LENGTH);
   return cleaned.length > 0 ? cleaned : null;
@@ -69,6 +69,69 @@ function isRateLimited(socketId) {
   attempts.push(now);
   joinAttempts.set(socketId, attempts);
   return attempts.length > JOIN_ATTEMPT_LIMIT;
+}
+
+// --- Дедупликация игроков при переходе index.html -> room.html ---
+//
+// Клиент использует ДВА разных socket.io-соединения: одно на главной
+// странице (создание/подключение к комнате) и новое — на странице комнаты
+// (identify-room). Когда браузер переходит по ссылке, старое соединение
+// закрывается не мгновенно (иногда сервер узнаёт о разрыве только через
+// несколько секунд), а новое уже успевает представиться в той же комнате.
+// Из-за этого один и тот же человек на короткое (а иногда и не очень)
+// время виден как два игрока с одинаковым именем.
+//
+// Чтобы это исправить, клиент передаёт "sessionId" — один раз
+// сгенерированный идентификатор вкладки (хранится в sessionStorage) —
+// во всех запросах create-room/join-room/identify-room. Перед тем как
+// добавить игрока под новым socket.id, мы удаляем из комнаты любую
+// "устаревшую" запись с тем же sessionId.
+function sanitizeSessionId(rawSessionId) {
+  if (typeof rawSessionId !== "string") return null;
+  const cleaned = rawSessionId.trim().slice(0, 64);
+  return /^[A-Za-z0-9-]{8,64}$/.test(cleaned) ? cleaned : null;
+}
+
+// Готовим список игроков для отправки клиентам: sessionId — внутренний
+// технический идентификатор, его не должны видеть другие игроки.
+function getPublicPlayers(room) {
+  return Array.from(room.players.values()).map((p) => ({
+    id: p.id,
+    name: p.name,
+    isReady: p.isReady,
+    role: p.role,
+    hasVoted: p.hasVoted,
+    votedFor: p.votedFor,
+  }));
+}
+
+function removeStaleSessionPlayers(room, sessionId, excludeSocketId) {
+  if (!room || !sessionId) return;
+
+  for (const [existingSocketId, existingPlayer] of room.players.entries()) {
+    if (
+      existingSocketId !== excludeSocketId &&
+      existingPlayer.sessionId === sessionId
+    ) {
+      console.log(
+        `♻️ Removing stale duplicate of ${existingPlayer.name} (old socket ${existingSocketId})`
+      );
+
+      if (existingPlayer.isReady && room.readyCount > 0) {
+        room.readyCount--;
+      }
+
+      room.players.delete(existingSocketId);
+      socketToRoom.delete(existingSocketId);
+
+      // Если старый сокет ещё технически жив (не успел разорваться),
+      // выводим его из комнаты socket.io, чтобы он не получал её события.
+      const staleSocket = io.sockets.sockets.get(existingSocketId);
+      if (staleSocket) {
+        staleSocket.leave(room.id);
+      }
+    }
+  }
 }
 
 // Генерация ID комнаты
@@ -106,6 +169,7 @@ io.on("connection", (socket) => {
   socket.on("identify-room", (data) => {
     const roomId = data && data.roomId;
     const playerName = sanitizePlayerName(data && data.playerName);
+    const sessionId = sanitizeSessionId(data && data.sessionId);
 
     if (!isValidRoomId(roomId)) {
       console.log("❌ Invalid roomId in identify-room:", roomId);
@@ -125,8 +189,14 @@ io.on("connection", (socket) => {
 
       // Если игрок не найден, создаем нового с переданным именем
       if (!player) {
+        // Убираем "призрачную" запись этого же человека под старым
+        // socket.id (см. removeStaleSessionPlayers выше), чтобы не
+        // получить дубликат при переходе с главной страницы в комнату.
+        removeStaleSessionPlayers(room, sessionId, socket.id);
+
         player = {
           id: socket.id,
+          sessionId,
           name: playerName || `Player${room.players.size + 1}`,
           isReady: false,
           role: "crewmate",
@@ -135,12 +205,17 @@ io.on("connection", (socket) => {
         };
         room.players.set(socket.id, player);
         console.log(`👤 Created new player: ${player.name}`);
-      } else if (playerName && player.name !== playerName) {
-        // Обновляем имя игрока если оно изменилось
-        console.log(
-          `✏️ Updating player name from ${player.name} to ${playerName}`
-        );
-        player.name = playerName;
+      } else {
+        if (playerName && player.name !== playerName) {
+          // Обновляем имя игрока если оно изменилось
+          console.log(
+            `✏️ Updating player name from ${player.name} to ${playerName}`
+          );
+          player.name = playerName;
+        }
+        if (sessionId && !player.sessionId) {
+          player.sessionId = sessionId;
+        }
       }
 
       socket.join(roomId);
@@ -157,7 +232,7 @@ io.on("connection", (socket) => {
       // Отправляем информацию о комнате
       socket.emit("room-info", {
         password: room.password,
-        players: Array.from(room.players.values()),
+        players: getPublicPlayers(room),
         readyCount: room.readyCount,
         voting: room.voting,
         votes: room.votes,
@@ -172,6 +247,7 @@ io.on("connection", (socket) => {
   // Создание комнаты
   socket.on("create-room", (data) => {
     const playerName = sanitizePlayerName(data && data.playerName);
+    const sessionId = sanitizeSessionId(data && data.sessionId);
     console.log("🎮 Creating room for player:", playerName);
 
     if (!soundScanner.hasSounds()) {
@@ -198,6 +274,7 @@ io.on("connection", (socket) => {
     // Добавляем создателя в комнату
     const player = {
       id: socket.id,
+      sessionId,
       name: playerName || `Player1`,
       isReady: false,
       role: "crewmate",
@@ -220,7 +297,7 @@ io.on("connection", (socket) => {
     // Сразу отправляем информацию о комнате создателю
     socket.emit("room-info", {
       password: room.password,
-      players: Array.from(room.players.values()),
+      players: getPublicPlayers(room),
       readyCount: room.readyCount,
       voting: room.voting,
       votes: room.votes,
@@ -243,6 +320,7 @@ io.on("connection", (socket) => {
         ? data.roomPassword.toUpperCase().trim()
         : "";
     const playerName = sanitizePlayerName(data && data.playerName);
+    const sessionId = sanitizeSessionId(data && data.sessionId);
 
     console.log("🔗 Join room attempt:", { roomPassword, playerName });
 
@@ -297,9 +375,14 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // На случай повторного join-room тем же сокетом (двойной клик) —
+    // убираем возможный дубль по sessionId перед добавлением.
+    removeStaleSessionPlayers(targetRoom, sessionId, socket.id);
+
     // Добавляем игрока
     const player = {
       id: socket.id,
+      sessionId,
       name: playerName || `Player${targetRoom.players.size + 1}`,
       isReady: false,
       role: "crewmate",
@@ -323,7 +406,7 @@ io.on("connection", (socket) => {
     // Обновляем список игроков для всех в комнате
     io.to(targetRoomId).emit("room-info", {
       password: targetRoom.password,
-      players: Array.from(targetRoom.players.values()),
+      players: getPublicPlayers(targetRoom),
       readyCount: targetRoom.readyCount,
       voting: targetRoom.voting,
       votes: targetRoom.votes,
@@ -370,7 +453,7 @@ io.on("connection", (socket) => {
       // Обновляем информацию о комнате
       io.to(roomId).emit("room-info", {
         password: room.password,
-        players: Array.from(room.players.values()),
+        players: getPublicPlayers(room),
         readyCount: room.readyCount,
         voting: room.voting,
         votes: room.votes,
@@ -424,7 +507,7 @@ io.on("connection", (socket) => {
       // Обновляем информацию о комнате
       io.to(roomId).emit("room-info", {
         password: room.password,
-        players: Array.from(room.players.values()),
+        players: getPublicPlayers(room),
         readyCount: room.readyCount,
         voting: room.voting,
         votes: room.votes,
@@ -527,7 +610,7 @@ io.on("connection", (socket) => {
       console.log(`✅ Room found, sending info for room: ${roomId}`);
       socket.emit("room-info", {
         password: room.password,
-        players: Array.from(room.players.values()),
+        players: getPublicPlayers(room),
         readyCount: room.readyCount,
         voting: room.voting,
         votes: room.votes,
@@ -577,7 +660,7 @@ io.on("connection", (socket) => {
           // Обновляем оставшихся игроков
           io.to(roomId).emit("room-info", {
             password: room.password,
-            players: Array.from(room.players.values()),
+            players: getPublicPlayers(room),
             readyCount: room.readyCount,
             voting: room.voting,
             votes: room.votes,
@@ -779,14 +862,14 @@ function startVoting(roomId) {
 
   // Уведомляем о начале голосования
   io.to(roomId).emit("voting-started", {
-    players: Array.from(room.players.values()),
+    players: getPublicPlayers(room),
     votedPlayers: votedPlayers,
   });
 
   // Обновляем информацию о комнате
   io.to(roomId).emit("room-info", {
     password: room.password,
-    players: Array.from(room.players.values()),
+    players: getPublicPlayers(room),
     readyCount: room.readyCount,
     voting: room.voting,
     votes: room.votes,
@@ -854,7 +937,7 @@ function showVotingResults(roomId) {
   // Обновляем информацию о комнате
   io.to(roomId).emit("room-info", {
     password: room.password,
-    players: Array.from(room.players.values()),
+    players: getPublicPlayers(room),
     readyCount: room.readyCount,
     voting: room.voting,
     votes: room.votes,
