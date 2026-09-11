@@ -33,14 +33,19 @@ const maxPlayersValue = document.getElementById("maxPlayersValue");
 const roundDurationInput = document.getElementById("roundDurationInput");
 const roundDurationValue = document.getElementById("roundDurationValue");
 
+// Ползунки двигаются "по пикселям" (шаг 0.01), а не целыми делениями —
+// так перетаскивание выглядит плавным. Показываем при этом округлённое
+// целое значение, а при отправке на сервер тоже округляем.
 if (maxPlayersInput) {
   maxPlayersInput.addEventListener("input", () => {
-    maxPlayersValue.textContent = maxPlayersInput.value;
+    maxPlayersValue.textContent = Math.round(Number(maxPlayersInput.value));
   });
 }
 if (roundDurationInput) {
   roundDurationInput.addEventListener("input", () => {
-    roundDurationValue.textContent = roundDurationInput.value;
+    roundDurationValue.textContent = Math.round(
+      Number(roundDurationInput.value)
+    );
   });
 }
 
@@ -55,9 +60,11 @@ document.getElementById("createRoomConfirm").addEventListener("click", () => {
   // Сохраняем имя в sessionStorage
   sessionStorage.setItem("playerName", playerName);
 
-  const maxPlayers = maxPlayersInput ? Number(maxPlayersInput.value) : undefined;
+  const maxPlayers = maxPlayersInput
+    ? Math.round(Number(maxPlayersInput.value))
+    : undefined;
   const roundDuration = roundDurationInput
-    ? Number(roundDurationInput.value)
+    ? Math.round(Number(roundDurationInput.value))
     : undefined;
 
   console.log(
