@@ -4,9 +4,6 @@ const {
   isValidRoomPassword,
 } = require("../schemas/validation");
 
-// Регистрирует все socket.io-обработчики. Сам контроллер не хранит
-// никакого состояния — он только валидирует вход, зовёт roomService/
-// gameService и решает, какое событие отправить клиенту в ответ.
 function registerSocketHandlers(
   io,
   { roomService, gameService, soundScanner, joinRateLimiter }
@@ -14,8 +11,6 @@ function registerSocketHandlers(
   io.on("connection", (socket) => {
     logger.debug("✅ User connected:", socket.id);
 
-    // Идентификация комнаты при загрузке страницы комнаты (в том числе
-    // повторно — после обрыва связи и автопереподключения socket.io).
     socket.on("identify-room", (data) => {
       const roomId = data && data.roomId;
 
@@ -48,12 +43,9 @@ function registerSocketHandlers(
 
       socket.emit("room-info", roomService.getRoomInfo(result.room));
 
-      // Если игрок вернулся во время активного раунда/голосования —
-      // остальные тоже должны увидеть, что он снова на связи.
       io.to(roomId).emit("room-info", roomService.getRoomInfo(result.room));
     });
 
-    // Создание комнаты
     socket.on("create-room", (data) => {
       logger.debug("🎮 Creating room for player:", data && data.playerName);
 
@@ -76,10 +68,8 @@ function registerSocketHandlers(
         `🎪 Room created: ${room.id}, Password: ${room.password}, Creator: ${player.name}, maxPlayers: ${room.maxPlayers}, roundDuration: ${room.roundDuration}ms`
       );
 
-      // Сразу отправляем информацию о комнате создателю
       socket.emit("room-info", roomService.getRoomInfo(room));
 
-      // Ждём немного перед редиректом, чтобы комната точно создалась
       setTimeout(() => {
         socket.emit("room-created", {
           roomId: room.id,
@@ -88,7 +78,6 @@ function registerSocketHandlers(
       }, 100);
     });
 
-    // Подключение к комнате
     socket.on("join-room", (data) => {
       const roomPassword =
         data && typeof data.roomPassword === "string"
@@ -97,7 +86,6 @@ function registerSocketHandlers(
 
       logger.debug("🔗 Join room attempt:", { roomPassword });
 
-      // Защита от подбора пароля: ограничиваем частоту попыток на сокет
       if (joinRateLimiter.isRateLimited(socket.id)) {
         logger.debug("⛔ Rate limit exceeded for join-room:", socket.id);
         socket.emit("error", "Слишком много попыток, подождите немного");
@@ -146,14 +134,12 @@ function registerSocketHandlers(
 
       socket.emit("room-joined", { roomId: result.roomId });
 
-      // Обновляем список игроков для всех в комнате
       io.to(result.roomId).emit(
         "room-info",
         roomService.getRoomInfo(result.room)
       );
     });
 
-    // Готовность игрока
     socket.on("player-ready", (data) => {
       const roomId = data && data.roomId;
       logger.debug(`🎯 Player ready: ${socket.id} in room ${roomId}`);
@@ -184,7 +170,6 @@ function registerSocketHandlers(
         socket.emit("ready-status-changed", { isReady: true });
         io.to(roomId).emit("room-info", roomService.getRoomInfo(result.room));
 
-        // Проверяем, все ли готовы (минимум 2 игрока)
         if (
           result.room.readyCount === result.room.players.size &&
           result.room.players.size >= 2
@@ -197,7 +182,6 @@ function registerSocketHandlers(
       }
     });
 
-    // Отмена готовности
     socket.on("player-unready", (data) => {
       const roomId = data && data.roomId;
       logger.debug(`🎯 Player unready: ${socket.id} in room ${roomId}`);
@@ -230,7 +214,6 @@ function registerSocketHandlers(
       }
     });
 
-    // Голосование за предателя
     socket.on("vote-impostor", (data) => {
       const { roomId, votedPlayerId } = data || {};
       logger.debug(
@@ -256,14 +239,13 @@ function registerSocketHandlers(
 
       if (result.allVoted) {
         logger.debug(`🏁 All players voted in room ${roomId}`);
-        // Небольшая задержка перед показом результатов
+
         setTimeout(() => {
           gameService.showVotingResults(roomId);
         }, 1000);
       }
     });
 
-    // Запрос информации о комнате
     socket.on("get-room-info", (data) => {
       const roomId = data && data.roomId;
       logger.debug(`📊 Room info requested for: ${roomId}`);
@@ -277,17 +259,13 @@ function registerSocketHandlers(
       }
     });
 
-    // Отключение игрока
     socket.on("disconnect", () => {
       logger.debug("❌ User disconnected:", socket.id);
 
-      // Чистим счётчик попыток подключения, чтобы не копить память
       joinRateLimiter.clear(socket.id);
 
       const result = roomService.handleDisconnect(socket.id, (expired) => {
-        // Сработало, если игрок не переподключился за отведённое время
-        // (см. DISCONNECT_GRACE_MS в roomService) — досрочно, ДО этого
-        // колбэка, ничего клиентам не отправлялось.
+
         finalizePlayerRemoval(expired.roomId, expired.room);
       });
 
@@ -298,13 +276,11 @@ function registerSocketHandlers(
       if (permanentlyRemoved) {
         finalizePlayerRemoval(roomId, room);
       } else {
-        // Игрок пока не удалён — просто сообщаем остальным, что он
-        // временно не на связи (см. connected:false в payload игрока).
+
         io.to(roomId).emit("room-info", roomService.getRoomInfo(room));
       }
     });
 
-    // Отмена голоса
     socket.on("cancel-vote", (data) => {
       const roomId = data && data.roomId;
       logger.debug(`🗑️ Cancel vote from ${socket.id} in room ${roomId}`);
@@ -323,9 +299,6 @@ function registerSocketHandlers(
       socket.emit("vote-cancelled");
     });
 
-    // Общая логика для "игрок окончательно ушёл из комнаты" — вызывается
-    // и сразу при disconnect в лобби, и по истечении грейс-периода во
-    // время активного раунда.
     function finalizePlayerRemoval(roomId, room) {
       if (room.players.size === 0 && room.status === "waiting") {
         logger.debug(`⏰ Scheduling room deletion in 5 seconds: ${roomId}`);
@@ -340,8 +313,6 @@ function registerSocketHandlers(
       if (room.players.size > 0) {
         io.to(roomId).emit("room-info", roomService.getRoomInfo(room));
 
-        // Если ушедший был последним, кто не проголосовал — голосование
-        // теперь должно завершиться само.
         if (
           room.voting &&
           Array.from(room.players.values()).every((p) => p.hasVoted)

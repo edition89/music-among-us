@@ -1,8 +1,5 @@
-// Простой rate-limiter в памяти: не более `limit` вызовов за `windowMs`
-// на один ключ (обычно socket.id). Используется, например, чтобы
-// затруднить перебор 4-символьного пароля комнаты через join-room.
 function createRateLimiter(limit, windowMs) {
-  const hits = new Map(); // key -> timestamps[]
+  const hits = new Map();
 
   return {
     isRateLimited(key) {
@@ -15,7 +12,6 @@ function createRateLimiter(limit, windowMs) {
       return attempts.length > limit;
     },
 
-    // Вызывать при disconnect, чтобы не копить память по отключившимся сокетам.
     clear(key) {
       hits.delete(key);
     },

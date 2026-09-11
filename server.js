@@ -20,12 +20,10 @@ const io = socketIo(server);
 
 const soundScanner = new SoundScanner();
 
-// Middleware
 app.use(express.static("public"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Маршруты
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "views", "index.html"));
 });
@@ -34,10 +32,6 @@ app.get("/room/:roomId", (req, res) => {
   res.sendFile(path.join(__dirname, "views", "room.html"));
 });
 
-// Кол-во игроков и длительность раунда теперь настраиваются хостом за
-// комнату (см. server/schemas/validation.js), поэтому roomService/
-// gameService больше не принимают их как глобальные константы —
-// только то, что действительно одинаково для всех комнат.
 const roomService = createRoomService(io, {
   roomIdLength: ROOM_ID_LENGTH,
 });

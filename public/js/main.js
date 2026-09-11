@@ -1,8 +1,5 @@
 const socket = io();
 
-// Постоянный на вкладку идентификатор сессии игрока. Нужен серверу, чтобы
-// при переходе с главной страницы в комнату (новое socket.io-соединение)
-// не создавать дубликат игрока, а заменить его старую запись.
 function getOrCreatePlayerSessionId() {
   let sessionId = sessionStorage.getItem("playerSessionId");
   if (!sessionId) {
@@ -27,15 +24,11 @@ document.getElementById("joinRoomBtn").addEventListener("click", () => {
   document.getElementById("joinRoomPassword").focus();
 });
 
-// Живое обновление подписей у ползунков настроек комнаты
 const maxPlayersInput = document.getElementById("maxPlayersInput");
 const maxPlayersValue = document.getElementById("maxPlayersValue");
 const roundDurationInput = document.getElementById("roundDurationInput");
 const roundDurationValue = document.getElementById("roundDurationValue");
 
-// Ползунки двигаются "по пикселям" (шаг 0.01), а не целыми делениями —
-// так перетаскивание выглядит плавным. Показываем при этом округлённое
-// целое значение, а при отправке на сервер тоже округляем.
 if (maxPlayersInput) {
   maxPlayersInput.addEventListener("input", () => {
     maxPlayersValue.textContent = Math.round(Number(maxPlayersInput.value));
@@ -57,7 +50,6 @@ document.getElementById("createRoomConfirm").addEventListener("click", () => {
     return;
   }
 
-  // Сохраняем имя в sessionStorage
   sessionStorage.setItem("playerName", playerName);
 
   const maxPlayers = maxPlayersInput
@@ -102,7 +94,6 @@ document.getElementById("joinRoomConfirm").addEventListener("click", () => {
     return;
   }
 
-  // Сохраняем имя в sessionStorage
   sessionStorage.setItem("playerName", playerName);
 
   console.log(
@@ -118,7 +109,6 @@ document.getElementById("joinRoomConfirm").addEventListener("click", () => {
   });
 });
 
-// Обработка нажатия Enter в формах
 document
   .getElementById("playerNameCreate")
   .addEventListener("keypress", (e) => {
@@ -145,12 +135,10 @@ socket.on("room-created", (data) => {
   console.log("✅ Room created:", data.roomId, "Password:", data.password);
   console.log("🔗 Redirecting to room:", data.roomId);
 
-  // Сохраняем информацию о комнате в sessionStorage
   sessionStorage.setItem("lastRoomId", data.roomId);
   sessionStorage.setItem("lastRoomPassword", data.password);
   sessionStorage.setItem("roomCreationTime", Date.now().toString());
 
-  // Небольшая задержка перед редиректом
   setTimeout(() => {
     window.location.href = `/room/${data.roomId}`;
   }, 200);
@@ -160,7 +148,6 @@ socket.on("room-joined", (data) => {
   console.log("✅ Joined room:", data.roomId);
   console.log("🔗 Redirecting to room:", data.roomId);
 
-  // Сохраняем информацию о комнате в sessionStorage
   sessionStorage.setItem("lastRoomId", data.roomId);
   sessionStorage.setItem("roomJoinTime", Date.now().toString());
 
@@ -174,22 +161,18 @@ socket.on("error", (message) => {
   showError(message);
 });
 
-const ERROR_DISPLAY_MS = 8000; // время показа ошибки
-const ERROR_FADE_MS = 400; // должно совпадать с transition в style.css
+const ERROR_DISPLAY_MS = 8000;
+const ERROR_FADE_MS = 400;
 
 function showError(message) {
   const errorDiv = document.getElementById("errorMessage");
 
-  // Если предыдущая ошибка ещё показывается/скрывается — сбрасываем её таймеры,
-  // чтобы новая ошибка не исчезла раньше времени и анимация не "дёргалась".
   clearTimeout(errorDiv._hideTimeout);
   clearTimeout(errorDiv._removeTimeout);
 
   errorDiv.textContent = message;
   errorDiv.classList.remove("hidden");
 
-  // Форсируем перерасчёт стилей, чтобы transition сработал даже если
-  // блок уже был видим (например, показываем вторую ошибку подряд).
   void errorDiv.offsetWidth;
   errorDiv.classList.add("show");
 

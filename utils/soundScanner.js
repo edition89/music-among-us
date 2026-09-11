@@ -19,7 +19,6 @@ class SoundScanner {
       const impostorPath = path.join(SOUNDS_FOLDER, "impostor");
       const crewmatePath = path.join(SOUNDS_FOLDER, "crewmate");
 
-      // Сканируем папку предателя
       if (fs.existsSync(impostorPath)) {
         this.sounds.impostor = fs
           .readdirSync(impostorPath)
@@ -27,7 +26,6 @@ class SoundScanner {
           .map((file) => `/sounds/impostor/${file}`);
       }
 
-      // Сканируем папку команды
       if (fs.existsSync(crewmatePath)) {
         this.sounds.crewmate = fs
           .readdirSync(crewmatePath)
@@ -35,7 +33,6 @@ class SoundScanner {
           .map((file) => `/sounds/crewmate/${file}`);
       }
 
-      // Сканируем звуки отсчета и завершения
       const countdownPath = path.join(SOUNDS_FOLDER, "countdown.mp3");
       const roundEndPath = path.join(SOUNDS_FOLDER, "round-end.mp3");
 

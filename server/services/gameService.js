@@ -1,14 +1,5 @@
 const logger = require("../../utils/logger");
 
-// Логика игрового раунда: старт, выбор предателя и музыки, голосование
-// и результаты. Все socket.io-события шлёт сам сервис (в отличие от
-// roomService, который только меняет состояние комнаты) — сюда часто
-// нужно достучаться из таймеров (setTimeout/setInterval), а не только
-// в ответ на конкретное событие от клиента.
-//
-// Длительность раунда теперь настраивается хостом на уровне комнаты
-// (room.roundDuration), поэтому глобальная константа для неё сервису
-// больше не передаётся — только PREPARE_TIME, который одинаков для всех.
 function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
   function startGame(roomId) {
     const room = roomService.getRoom(roomId);
@@ -20,7 +11,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
     logger.debug(`🎮 Starting game in room: ${roomId}`);
     room.status = "preparing";
 
-    // Выбираем предателя
     const playersArray = Array.from(room.players.values());
     const impostorIndex = Math.floor(Math.random() * playersArray.length);
     const impostor = playersArray[impostorIndex];
@@ -30,7 +20,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
 
     logger.debug(`🎭 Impostor selected: ${impostor.name}`);
 
-    // Выбираем музыку
     room.currentSounds = {
       impostor: soundScanner.getRandomImpostorSound(),
       crewmate: soundScanner.getRandomCrewmateSound(),
@@ -40,7 +29,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
 
     logger.debug(`🎵 Sounds selected:`, room.currentSounds);
 
-    // Воспроизводим звук отсчета для всех
     if (room.currentSounds.countdown) {
       logger.debug(`🔊 Playing countdown sound in room: ${roomId}`);
       io.to(roomId).emit("play-countdown", {
@@ -49,7 +37,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
       });
     }
 
-    // Уведомляем о начале подготовки с счетчиком
     let countdown = PREPARE_TIME / 1000;
     io.to(roomId).emit("game-starting", {
       prepareTime: PREPARE_TIME,
@@ -65,13 +52,11 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
       }
     }, 1000);
 
-    // Через время подготовки начинаем игру
     setTimeout(() => {
       room.status = "playing";
 
       logger.debug(`🎵 Playing music in room: ${roomId}`);
 
-      // Отправляем музыку каждому игроку
       room.players.forEach((player, playerId) => {
         const sound =
           player.role === "impostor"
@@ -89,7 +74,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
         });
       });
 
-      // Завершаем игру через указанное для этой комнаты время
       setTimeout(() => {
         endGame(roomId);
       }, room.roundDuration);
@@ -105,13 +89,11 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
     room.status = "waiting";
     room.readyCount = 0;
 
-    // Сбрасываем готовность всех игроков
     room.players.forEach((player) => {
       player.isReady = false;
       player.role = "crewmate";
     });
 
-    // Воспроизводим звук завершения раунда
     if (room.currentSounds && room.currentSounds.roundEnd) {
       logger.debug(`🔊 Playing round end sound in room: ${roomId}`);
       io.to(roomId).emit("play-round-end", {
@@ -131,7 +113,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
     room.voting = true;
     room.votes = {};
 
-    // Сбрасываем статус голосования у всех игроков
     room.players.forEach((player) => {
       player.hasVoted = false;
       player.votedFor = null;
@@ -151,7 +132,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
 
     logger.debug(`📊 Showing voting results for room: ${roomId}`);
 
-    // Собираем результаты голосования для каждого игрока
     const votingResults = {};
     room.players.forEach((player) => {
       if (player.votedFor) {
@@ -163,7 +143,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
       }
     });
 
-    // Находим игрока с наибольшим количеством голосов
     let maxVotes = 0;
     let suspectedImpostorId = null;
     let tie = false;
@@ -189,7 +168,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
       `🎭 Voting results - Suspected: ${suspectedImpostor?.name}, Actual: ${actualImpostor?.name}, Tie: ${tie}`
     );
 
-    // Завершаем голосование
     room.voting = false;
     room.votes = {};
 
@@ -204,7 +182,6 @@ function createGameService(io, roomService, soundScanner, { PREPARE_TIME }) {
 
     io.to(roomId).emit("room-info", roomService.getRoomInfo(room));
 
-    // Сбрасываем impostor и статус голосования для следующего раунда
     room.impostor = null;
     room.players.forEach((player) => {
       player.hasVoted = false;

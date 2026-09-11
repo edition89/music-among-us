@@ -1,8 +1,3 @@
-// Простой логгер с уровнями. В проде (NODE_ENV=production) показываем
-// только warn/error — не заваливаем консоль/лог-файлы PM2 отладочными
-// сообщениями о каждом сокет-событии. Вне прода (или если NODE_ENV не
-// задан, как при обычном "node server.js"/"npm run dev") показываем всё,
-// чтобы разработка и отладка не пострадали.
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
 const isProduction = process.env.NODE_ENV === "production";

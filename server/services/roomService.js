@@ -6,24 +6,11 @@ const {
   sanitizeRoundDurationMs,
 } = require("../schemas/validation");
 
-// Сколько ждать переподключения игрока, если он отвалился во время
-// активного раунда (подготовка/музыка/голосование), прежде чем убрать
-// его насовсем. В лобби ("waiting" и не идёт голосование) ждать нет
-// смысла — там потеря состояния ничем не грозит, убираем сразу.
 const DISCONNECT_GRACE_MS = 20000;
 
-// Вся работа с комнатами и игроками живёт здесь, в памяти процесса (Map),
-// без единого socket.io emit — сервис только меняет состояние и
-// возвращает структурированный результат, а что и кому отправить,
-// решает вызывающий код (socketController).
-//
-// `io` нужен сервису для двух вещей: (1) если "призрачный" сокет
-// человека, который уже открыл комнату под новым соединением, ещё
-// технически жив, мы выводим его из комнаты socket.io; (2) не более —
-// самих событий сервис не шлёт.
 function createRoomService(io, { roomIdLength }) {
-  const rooms = new Map(); // roomId -> room
-  const socketToRoom = new Map(); // socket.id -> roomId
+  const rooms = new Map();
+  const socketToRoom = new Map();
 
   function generateRoomId() {
     return Math.random()
@@ -62,9 +49,6 @@ function createRoomService(io, { roomIdLength }) {
     }
   }
 
-  // Игрок в виде, безопасном для отправки клиентам: sessionId и
-  // disconnectTimer — внутренние технические детали, их не должны
-  // видеть другие игроки.
   function toPublicPlayer(player, room) {
     if (!player) return null;
     return {
@@ -95,7 +79,6 @@ function createRoomService(io, { roomIdLength }) {
       .map((p) => ({ id: p.id, name: p.name }));
   }
 
-  // Стандартный payload события "room-info".
   function getRoomInfo(room) {
     return {
       password: room.password,
@@ -108,31 +91,12 @@ function createRoomService(io, { roomIdLength }) {
     };
   }
 
-  // Раунд считается "активным", если прерывать его потерей игрока
-  // нежелательно: идёт подготовка/музыка или голосование. Обратите
-  // внимание, что во время голосования room.status всё ещё "waiting"
-  // (так было устроено изначально) — поэтому проверяем ещё и room.voting.
   function isRoundActive(room) {
     return (
       room.status === "preparing" || room.status === "playing" || room.voting
     );
   }
 
-  // --- Дедупликация / переподключение игроков ---
-  //
-  // Клиент использует ДВА разных socket.io-соединения: одно на главной
-  // странице (создание/подключение к комнате) и новое — на странице
-  // комнаты (identify-room). Кроме того, во время игры у человека может
-  // просто моргнуть связь, и socket.io переподключится под новым
-  // socket.id. В обоих случаях клиент присылает один и тот же постоянный
-  // на вкладку "sessionId" (хранится в sessionStorage).
-  //
-  // Раньше в этой ситуации старая запись просто удалялась, а взамен
-  // создавалась новая — это решало проблему дублей в лобби, но во время
-  // игры стирало роль игрока, его голос и статус готовности. Теперь мы
-  // "переносим" существующего игрока на новый socket.id, сохраняя всё
-  // его состояние, и поправляем ссылки на старый id (кто предатель, кто
-  // за кого проголосовал), которые иначе указывали бы в никуда.
   function reclaimStalePlayer(room, sessionId, newSocketId, playerName) {
     if (!sessionId) return null;
 
@@ -146,8 +110,6 @@ function createRoomService(io, { roomIdLength }) {
 
       clearDisconnectTimer(existingPlayer);
 
-      // Переносим ссылки на старый socket.id (роль предателя, чужие
-      // голоса "за" этого игрока), иначе они будут указывать в никуда.
       if (room.impostor === oldSocketId) {
         room.impostor = newSocketId;
       }
@@ -168,8 +130,6 @@ function createRoomService(io, { roomIdLength }) {
       room.players.delete(oldSocketId);
       socketToRoom.delete(oldSocketId);
 
-      // Если старый сокет ещё технически жив (не успел разорваться),
-      // выводим его из комнаты socket.io, чтобы он не получал её события.
       const staleSocket = io.sockets.sockets.get(oldSocketId);
       if (staleSocket) {
         staleSocket.leave(room.id);
@@ -215,8 +175,7 @@ function createRoomService(io, { roomIdLength }) {
       createdAt: Date.now(),
       maxPlayers,
       roundDuration,
-      // Хост — создатель комнаты, определяется по sessionId (а не
-      // socket.id, который меняется при переходе на страницу комнаты).
+
       hostSessionId: sessionId,
     };
 
@@ -333,7 +292,6 @@ function createRoomService(io, { roomIdLength }) {
     const votedPlayer = room.players.get(votedPlayerId);
     if (!voter || !votedPlayer) return { error: "not_found" };
 
-    // Если игрок уже голосовал, убираем его предыдущий голос
     if (voter.hasVoted && voter.votedFor) {
       if (room.votes[voter.votedFor]) {
         room.votes[voter.votedFor]--;
@@ -374,14 +332,6 @@ function createRoomService(io, { roomIdLength }) {
     return { room, votedPlayers: getVotedPlayersSummary(room) };
   }
 
-  // Обрабатывает disconnect сокета. В лобби убираем игрока сразу (как и
-  // раньше) — там терять нечего. Во время активного раунда/голосования
-  // даём DISCONNECT_GRACE_MS на переподключение (обрыв связи, обновление
-  // страницы): игрок помечается connected:false, но остаётся в комнате
-  // со своей ролью/голосом/готовностью. Если он не вернётся вовремя —
-  // удаляем насовсем и зовём onGraceExpired, чтобы вызывающий код
-  // (socketController) разослал обновлённое состояние и проверил,
-  // например, не завершилось ли теперь голосование.
   function handleDisconnect(socketId, onGraceExpired) {
     const roomId = socketToRoom.get(socketId);
     socketToRoom.delete(socketId);

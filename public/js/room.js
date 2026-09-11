@@ -5,10 +5,9 @@ let currentPlayerId = null;
 let isReady = false;
 let roomPassword = "";
 let players = [];
-let myVote = null; // Храним выбор текущего пользователя
-let currentVotedPlayers = []; // Храним текущий список проголосовавших
+let myVote = null;
+let currentVotedPlayers = [];
 
-// Получаем имя игрока из sessionStorage
 function getPlayerName() {
   return (
     sessionStorage.getItem("playerName") ||
@@ -16,9 +15,6 @@ function getPlayerName() {
   );
 }
 
-// Тот же постоянный на вкладку идентификатор сессии, что и на главной
-// странице (main.js) — используется сервером для замены "призрачной"
-// записи игрока под старым socket.id вместо создания дубликата.
 function getOrCreatePlayerSessionId() {
   let sessionId = sessionStorage.getItem("playerSessionId");
   if (!sessionId) {
@@ -33,27 +29,23 @@ function getOrCreatePlayerSessionId() {
 
 console.log("🔗 Loading room:", roomId);
 
-// Получаем информацию о комнате при загрузке
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("roomTitle").textContent = roomId;
   document.getElementById("goHome").addEventListener("click", () => {
-    // Убираем confirm и сразу переходим на главную
+
     window.location.href = "/";
   });
 
   setupReadyButtons();
   setupVotingButtons();
 
-  // Получаем имя игрока и постоянный ID сессии этой вкладки
   const playerName = getPlayerName();
   const sessionId = getOrCreatePlayerSessionId();
   console.log("👤 Player name:", playerName, "session:", sessionId);
 
-  // Сразу идентифицируемся с комнатой
   console.log("🔍 Immediately identifying with room:", roomId);
   socket.emit("identify-room", { roomId, playerName, sessionId });
 
-  // Дополнительная идентификация через небольшой промежуток
   const identificationAttempts = [100, 500, 1000, 2000];
   identificationAttempts.forEach((delay) => {
     setTimeout(() => {
@@ -62,21 +54,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }, delay);
   });
 
-  // Переподключение (обрыв связи, а не только первая загрузка страницы):
-  // socket.io сам восстанавливает соединение под новым socket.id, но
-  // серверу нужно заново сказать, в какой комнате мы находимся, иначе
-  // мы останемся отвязаны от неё до истечения грейс-периода.
   socket.on("connect", () => {
     console.log("🔌 Socket (re)connected, re-identifying with room:", roomId);
     socket.emit("identify-room", { roomId, playerName, sessionId });
   });
 
-  // Периодически запрашиваем обновление информации о комнате
   const intervalId = setInterval(() => {
     socket.emit("get-room-info", { roomId });
   }, 3000);
 
-  // Останавливаем интервал при уходе со страницы
   window.addEventListener("beforeunload", () => {
     clearInterval(intervalId);
   });
@@ -107,7 +93,6 @@ function setupVotingButtons() {
   });
 }
 
-// Socket события
 socket.on("room-info", (data) => {
   console.log("📊 Room info received:", data);
 
@@ -117,14 +102,12 @@ socket.on("room-info", (data) => {
     console.log("🔑 Room password set to:", roomPassword);
   }
 
-  // Обновляем список игроков
   if (data.players && Array.isArray(data.players)) {
     players = data.players;
     updatePlayersList(data.players);
     document.getElementById("playersCount").textContent = data.players.length;
     document.getElementById("readyCount").textContent = data.readyCount || 0;
 
-    // Используем maxPlayers из данных или значение по умолчанию
     const maxPlayers = data.maxPlayers || 6;
     document.getElementById("maxPlayers").textContent = maxPlayers;
 
@@ -132,7 +115,6 @@ socket.on("room-info", (data) => {
       `👥 Players updated: ${data.players.length} players, ${data.readyCount} ready, max: ${maxPlayers}`
     );
 
-    // Обновляем статус голосования
     if (data.voting) {
       updateVotingStatus(data.players, data.votes);
     }
@@ -148,8 +130,10 @@ function createVotingInterface(players) {
   const votingContainer = document.getElementById("votingPlayers");
   const statusContainer = document.getElementById("votingStatus");
 
+  const votablePlayers = players.filter((player) => player.id !== socket.id);
+
   let html = "";
-  players.forEach((player) => {
+  votablePlayers.forEach((player) => {
     html += `
             <button class="btn btn-vote" data-player-id="${escapeHtml(player.id)}">
                 ${escapeHtml(player.name)}
@@ -160,32 +144,26 @@ function createVotingInterface(players) {
   votingContainer.innerHTML = html;
   statusContainer.textContent = `Проголосовало: 0/${players.length}`;
 
-  // Сбрасываем состояние голосования
   myVote = null;
   currentVotedPlayers = [];
 
-  // Добавляем обработчики для кнопок голосования
   document.querySelectorAll(".btn-vote").forEach((button) => {
     button.addEventListener("click", (e) => {
       const votedPlayerId = e.target.getAttribute("data-player-id");
       console.log("🗳️ Voting for player:", votedPlayerId);
 
-      // Если уже голосовали за этого игрока - отменяем голос
       if (myVote === votedPlayerId) {
         console.log("🗑️ Cancelling vote");
         cancelVote();
         return;
       }
 
-      // Сохраняем свой выбор
       myVote = votedPlayerId;
 
-      // Сбрасываем выделение со всех кнопок
       document.querySelectorAll(".btn-vote").forEach((btn) => {
         btn.classList.remove("my-vote", "my-vote-confirmed");
       });
 
-      // Выделяем свою кнопку
       e.target.classList.add("my-vote");
 
       socket.emit("vote-impostor", { roomId, votedPlayerId });
@@ -197,13 +175,11 @@ function cancelVote() {
   console.log("🗑️ Cancelling vote");
   myVote = null;
 
-  // Сбрасываем выделение со всех кнопок
   document.querySelectorAll(".btn-vote").forEach((btn) => {
     btn.classList.remove("my-vote", "my-vote-confirmed");
     btn.disabled = false;
   });
 
-  // Отправляем серверу информацию об отмене голоса
   socket.emit("cancel-vote", { roomId });
 }
 
@@ -220,7 +196,6 @@ socket.on("game-starting", (data) => {
   gameStatus.textContent = `🎮 Игра начинается через ${data.countdown} секунд...`;
   gameStatus.className = "game-status status-preparing";
 
-  // Скрываем кнопки готовности и секции голосования
   document.getElementById("readyBtn").classList.add("hidden");
   document.getElementById("unreadyBtn").classList.add("hidden");
   document.getElementById("votingSection").classList.add("hidden");
@@ -239,16 +214,13 @@ socket.on("voting-started", (data) => {
   gameStatus.textContent = "🗳️ Голосование: Кто был предателем?";
   gameStatus.className = "game-status status-voting";
 
-  // Сохраняем игроков
   if (data.players) {
     players = data.players;
   }
 
-  // Показываем секцию голосования
   document.getElementById("votingSection").classList.remove("hidden");
   createVotingInterface(data.players);
 
-  // Обновляем статус голосования
   if (data.votedPlayers) {
     updateVotingStatus({
       votedPlayers: data.votedPlayers,
@@ -261,7 +233,6 @@ socket.on("vote-cancelled", () => {
   console.log("✅ Vote cancelled on server");
   myVote = null;
 
-  // Сбрасываем выделение
   document.querySelectorAll(".btn-vote").forEach((btn) => {
     btn.classList.remove("my-vote", "my-vote-confirmed");
     btn.disabled = false;
@@ -289,14 +260,12 @@ socket.on("play-music", (data) => {
   gameStatus.textContent = `🎵 Игра идет! Вы: ${roleText}`;
   gameStatus.className = "game-status status-playing";
 
-  // Воспроизводим музыку
   if (data.sound) {
     audio.src = data.sound;
     audio.loop = true;
     audio.play().catch((e) => console.log("❌ Music audio play error:", e));
   }
 
-  // Таймер обратного отсчета
   let timeLeft = Math.floor(data.duration / 1000);
   updateTimer(gameStatus, roleText, timeLeft);
 
@@ -314,11 +283,9 @@ socket.on("play-round-end", (data) => {
   console.log("🔊 Playing round end sound");
   const audio = document.getElementById("gameAudio");
 
-  // Останавливаем текущую музыку
   audio.pause();
   audio.currentTime = 0;
 
-  // Воспроизводим звук завершения
   if (data.sound) {
     audio.src = data.sound;
     audio.loop = false;
@@ -339,7 +306,6 @@ socket.on("error", (message) => {
   console.error("❌ Server error:", message);
   const gameStatus = document.getElementById("gameStatus");
 
-  // Если ошибка "Комната не найдена", пробуем переидентифицироваться
   if (message === "Комната не найдена") {
     const playerName = getPlayerName();
     const sessionId = getOrCreatePlayerSessionId();
@@ -356,18 +322,17 @@ socket.on("error", (message) => {
 socket.on("private-vote-update", (data) => {
   console.log("🔒 Private vote update:", data);
 
-  // Подтверждаем свой выбор
   if (data.votedFor) {
     myVote = data.votedFor;
     const myButton = document.querySelector(
       `.btn-vote[data-player-id="${myVote}"]`
     );
     if (myButton) {
-      // Сбрасываем все выделения
+
       document.querySelectorAll(".btn-vote").forEach((btn) => {
         btn.classList.remove("my-vote", "my-vote-confirmed");
       });
-      // Добавляем подтвержденное выделение
+
       myButton.classList.add("my-vote-confirmed");
     }
   }
@@ -386,8 +351,6 @@ function updateReadyButtons() {
   }
 }
 
-// Экранирование пользовательского ввода перед вставкой в innerHTML,
-// чтобы имя игрока не могло исполнить произвольный HTML/JS (XSS).
 function escapeHtml(value) {
   const div = document.createElement("div");
   div.textContent = value == null ? "" : String(value);
@@ -433,19 +396,16 @@ function updatePlayersList(players) {
 function updateVotingStatus(data) {
   const statusContainer = document.getElementById("votingStatus");
 
-  // Сохраняем текущие данные
   if (data.votedPlayers) {
     currentVotedPlayers = data.votedPlayers;
   }
 
-  // Исправляем получение количества проголосовавших
   const votedCount = currentVotedPlayers.length;
   const totalCount = data.totalPlayers || players.length;
 
   console.log(`📊 Voting status: ${votedCount}/${totalCount}`);
   statusContainer.textContent = `Проголосовало: ${votedCount}/${totalCount}`;
 
-  // Добавляем активный класс если есть голоса
   if (votedCount > 0) {
     statusContainer.classList.add("active");
   } else {
@@ -458,12 +418,10 @@ function showVotingResults(data) {
   const resultsContent = document.getElementById("resultsContent");
   const gameStatus = document.getElementById("gameStatus");
 
-  // Скрываем секцию голосования
   document.getElementById("votingSection").classList.add("hidden");
 
   let resultsHtml = "";
 
-  // Показываем детали голосования
   resultsHtml += '<div class="voting-details">';
   resultsHtml += "<h4>Детали голосования:</h4>";
 
@@ -513,6 +471,5 @@ function showVotingResults(data) {
   resultsContent.innerHTML = resultsHtml;
   resultsSection.classList.remove("hidden");
 
-  // Сбрасываем статус готовности
   isReady = false;
 }
