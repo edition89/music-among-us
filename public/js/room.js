@@ -467,7 +467,6 @@ function showVotingResults(data) {
             <div class="result-tie">
                 <h4>🤔 Ничья!</h4>
                 <p>Голоса разделились, предателем был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
-                <p>Никто не был исключен</p>
             </div>
         `;
     gameStatus.textContent = "🤔 Голоса разделились!";
@@ -477,7 +476,6 @@ function showVotingResults(data) {
             <div class="result-success">
                 <h4>🎉 Правильно!</h4>
                 <p>Команда угадала! Предателем действительно был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
-                <p>Предатель исключен!</p>
             </div>
         `;
     gameStatus.textContent = "🎉 Команда угадала предателя!";
@@ -487,7 +485,6 @@ function showVotingResults(data) {
             <div class="result-fail">
                 <h4>❌ Неправильно!</h4>
                 <p>Команда проголосовала за <strong>${escapeHtml(data.suspectedImpostor.name)}</strong>, но предателем был <strong>${escapeHtml(data.actualImpostor.name)}</strong></p>
-                <p>Невиновный исключен!</p>
             </div>
         `;
     gameStatus.textContent = "❌ Команда не угадала предателя!";
