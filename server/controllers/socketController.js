@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const {
   isValidRoomId,
   isValidRoomPassword,
@@ -11,19 +12,20 @@ function registerSocketHandlers(
   { roomService, gameService, soundScanner, joinRateLimiter }
 ) {
   io.on("connection", (socket) => {
-    console.log("✅ User connected:", socket.id);
+    logger.debug("✅ User connected:", socket.id);
 
-    // Идентификация комнаты при загрузке страницы комнаты
+    // Идентификация комнаты при загрузке страницы комнаты (в том числе
+    // повторно — после обрыва связи и автопереподключения socket.io).
     socket.on("identify-room", (data) => {
       const roomId = data && data.roomId;
 
       if (!isValidRoomId(roomId)) {
-        console.log("❌ Invalid roomId in identify-room:", roomId);
+        logger.debug("❌ Invalid roomId in identify-room:", roomId);
         socket.emit("error", "Комната не найдена");
         return;
       }
 
-      console.log(`🔍 Identifying room for socket ${socket.id}: ${roomId}`);
+      logger.debug(`🔍 Identifying room for socket ${socket.id}: ${roomId}`);
 
       const result = roomService.identify(
         socket.id,
@@ -33,23 +35,27 @@ function registerSocketHandlers(
       );
 
       if (result.error) {
-        console.log(`❌ Room not found for identification: ${roomId}`);
+        logger.debug(`❌ Room not found for identification: ${roomId}`);
         socket.emit("error", "Комната не найдена");
         return;
       }
 
       socket.join(roomId);
 
-      console.log(
+      logger.debug(
         `✅ Socket ${socket.id} identified with room ${roomId}, player: ${result.player.name}`
       );
 
       socket.emit("room-info", roomService.getRoomInfo(result.room));
+
+      // Если игрок вернулся во время активного раунда/голосования —
+      // остальные тоже должны увидеть, что он снова на связи.
+      io.to(roomId).emit("room-info", roomService.getRoomInfo(result.room));
     });
 
     // Создание комнаты
     socket.on("create-room", (data) => {
-      console.log("🎮 Creating room for player:", data && data.playerName);
+      logger.debug("🎮 Creating room for player:", data && data.playerName);
 
       if (!soundScanner.hasSounds()) {
         socket.emit("error", "Игра готовится");
@@ -59,13 +65,15 @@ function registerSocketHandlers(
       const { room, player } = roomService.createRoom(
         socket.id,
         data && data.playerName,
-        data && data.sessionId
+        data && data.sessionId,
+        data && data.maxPlayers,
+        data && data.roundDuration
       );
 
       socket.join(room.id);
 
-      console.log(
-        `🎪 Room created: ${room.id}, Password: ${room.password}, Creator: ${player.name}`
+      logger.debug(
+        `🎪 Room created: ${room.id}, Password: ${room.password}, Creator: ${player.name}, maxPlayers: ${room.maxPlayers}, roundDuration: ${room.roundDuration}ms`
       );
 
       // Сразу отправляем информацию о комнате создателю
@@ -87,17 +95,17 @@ function registerSocketHandlers(
           ? data.roomPassword.toUpperCase().trim()
           : "";
 
-      console.log("🔗 Join room attempt:", { roomPassword });
+      logger.debug("🔗 Join room attempt:", { roomPassword });
 
       // Защита от подбора пароля: ограничиваем частоту попыток на сокет
       if (joinRateLimiter.isRateLimited(socket.id)) {
-        console.log("⛔ Rate limit exceeded for join-room:", socket.id);
+        logger.debug("⛔ Rate limit exceeded for join-room:", socket.id);
         socket.emit("error", "Слишком много попыток, подождите немного");
         return;
       }
 
       if (!isValidRoomPassword(roomPassword)) {
-        console.log("❌ Invalid room password format:", roomPassword);
+        logger.debug("❌ Invalid room password format:", roomPassword);
         socket.emit("error", "Комната не найдена");
         return;
       }
@@ -115,24 +123,24 @@ function registerSocketHandlers(
       );
 
       if (result.error === "not_found") {
-        console.log("❌ Room not found for password:", roomPassword);
+        logger.debug("❌ Room not found for password:", roomPassword);
         socket.emit("error", "Комната не найдена");
         return;
       }
       if (result.error === "full") {
-        console.log(`❌ Room full for password: ${roomPassword}`);
+        logger.debug(`❌ Room full for password: ${roomPassword}`);
         socket.emit("error", "Комната заполнена!");
         return;
       }
       if (result.error === "started") {
-        console.log("❌ Game already started for password:", roomPassword);
+        logger.debug("❌ Game already started for password:", roomPassword);
         socket.emit("error", "Игра уже началась");
         return;
       }
 
       socket.join(result.roomId);
 
-      console.log(
+      logger.debug(
         `✅ Player ${result.player.name} joined room ${result.roomId}`
       );
 
@@ -148,28 +156,28 @@ function registerSocketHandlers(
     // Готовность игрока
     socket.on("player-ready", (data) => {
       const roomId = data && data.roomId;
-      console.log(`🎯 Player ready: ${socket.id} in room ${roomId}`);
+      logger.debug(`🎯 Player ready: ${socket.id} in room ${roomId}`);
 
       const result = roomService.setPlayerReady(socket.id, roomId, true);
 
       if (result.error === "not_found") {
-        console.log("❌ Room not found:", roomId);
+        logger.debug("❌ Room not found:", roomId);
         socket.emit("error", "Комната не найдена");
         return;
       }
       if (result.error === "player_not_found") {
-        console.log("❌ Player not found in room:", socket.id);
+        logger.debug("❌ Player not found in room:", socket.id);
         socket.emit("error", "Игрок не найден в комнате");
         return;
       }
       if (result.error === "started") {
-        console.log("❌ Cannot set ready - game already started");
+        logger.debug("❌ Cannot set ready - game already started");
         socket.emit("error", "Игра уже началась");
         return;
       }
 
       if (result.changed) {
-        console.log(
+        logger.debug(
           `✅ Player ${result.player.name} is ready. Ready count: ${result.room.readyCount}/${result.room.players.size}`
         );
 
@@ -181,7 +189,7 @@ function registerSocketHandlers(
           result.room.readyCount === result.room.players.size &&
           result.room.players.size >= 2
         ) {
-          console.log(
+          logger.debug(
             `🚀 Starting game in room ${roomId} - all players ready!`
           );
           gameService.startGame(roomId);
@@ -192,28 +200,28 @@ function registerSocketHandlers(
     // Отмена готовности
     socket.on("player-unready", (data) => {
       const roomId = data && data.roomId;
-      console.log(`🎯 Player unready: ${socket.id} in room ${roomId}`);
+      logger.debug(`🎯 Player unready: ${socket.id} in room ${roomId}`);
 
       const result = roomService.setPlayerReady(socket.id, roomId, false);
 
       if (result.error === "not_found") {
-        console.log("❌ Room not found:", roomId);
+        logger.debug("❌ Room not found:", roomId);
         socket.emit("error", "Комната не найдена");
         return;
       }
       if (result.error === "player_not_found") {
-        console.log("❌ Player not found in room:", socket.id);
+        logger.debug("❌ Player not found in room:", socket.id);
         socket.emit("error", "Игрок не найден в комнате");
         return;
       }
       if (result.error === "started") {
-        console.log("❌ Cannot set unready - game already started");
+        logger.debug("❌ Cannot set unready - game already started");
         socket.emit("error", "Игра уже началась");
         return;
       }
 
       if (result.changed) {
-        console.log(
+        logger.debug(
           `❌ Player ${result.player.name} is not ready. Ready count: ${result.room.readyCount}/${result.room.players.size}`
         );
 
@@ -225,17 +233,17 @@ function registerSocketHandlers(
     // Голосование за предателя
     socket.on("vote-impostor", (data) => {
       const { roomId, votedPlayerId } = data || {};
-      console.log(
+      logger.debug(
         `🗳️ Vote from ${socket.id} for player ${votedPlayerId} in room ${roomId}`
       );
 
       const result = roomService.recordVote(roomId, socket.id, votedPlayerId);
       if (result.error) {
-        console.log("❌ Voting not active, room or players not found");
+        logger.debug("❌ Voting not active, room or players not found");
         return;
       }
 
-      console.log(
+      logger.debug(
         `✅ ${result.voter.name} voted for ${result.votedPlayer.name}`
       );
 
@@ -247,7 +255,7 @@ function registerSocketHandlers(
       socket.emit("private-vote-update", { votedFor: votedPlayerId });
 
       if (result.allVoted) {
-        console.log(`🏁 All players voted in room ${roomId}`);
+        logger.debug(`🏁 All players voted in room ${roomId}`);
         // Небольшая задержка перед показом результатов
         setTimeout(() => {
           gameService.showVotingResults(roomId);
@@ -258,39 +266,40 @@ function registerSocketHandlers(
     // Запрос информации о комнате
     socket.on("get-room-info", (data) => {
       const roomId = data && data.roomId;
-      console.log(`📊 Room info requested for: ${roomId}`);
+      logger.debug(`📊 Room info requested for: ${roomId}`);
 
       const room = roomService.getRoom(roomId);
       if (room) {
         socket.emit("room-info", roomService.getRoomInfo(room));
       } else {
-        console.log(`❌ Room not found: ${roomId}`);
+        logger.debug(`❌ Room not found: ${roomId}`);
         socket.emit("error", "Комната не найдена");
       }
     });
 
     // Отключение игрока
     socket.on("disconnect", () => {
-      console.log("❌ User disconnected:", socket.id);
+      logger.debug("❌ User disconnected:", socket.id);
 
       // Чистим счётчик попыток подключения, чтобы не копить память
       joinRateLimiter.clear(socket.id);
 
-      const removed = roomService.removePlayerBySocket(socket.id);
-      if (!removed) return;
+      const result = roomService.handleDisconnect(socket.id, (expired) => {
+        // Сработало, если игрок не переподключился за отведённое время
+        // (см. DISCONNECT_GRACE_MS в roomService) — досрочно, ДО этого
+        // колбэка, ничего клиентам не отправлялось.
+        finalizePlayerRemoval(expired.roomId, expired.room);
+      });
 
-      const { roomId, room, player } = removed;
-      console.log(`🗑️ Removing player ${player.name} from room ${roomId}`);
+      if (!result) return;
 
-      // Удаляем комнату ТОЛЬКО через 5 секунд, чтобы дать время на переподключение
-      if (room.players.size === 0 && room.status === "waiting") {
-        console.log(`⏰ Scheduling room deletion in 5 seconds: ${roomId}`);
-        setTimeout(() => {
-          if (roomService.deleteRoomIfEmpty(roomId)) {
-            console.log(`🏁 Deleting empty room: ${roomId}`);
-          }
-        }, 5000);
-      } else if (room.players.size > 0) {
+      const { roomId, room, permanentlyRemoved } = result;
+
+      if (permanentlyRemoved) {
+        finalizePlayerRemoval(roomId, room);
+      } else {
+        // Игрок пока не удалён — просто сообщаем остальным, что он
+        // временно не на связи (см. connected:false в payload игрока).
         io.to(roomId).emit("room-info", roomService.getRoomInfo(room));
       }
     });
@@ -298,11 +307,11 @@ function registerSocketHandlers(
     // Отмена голоса
     socket.on("cancel-vote", (data) => {
       const roomId = data && data.roomId;
-      console.log(`🗑️ Cancel vote from ${socket.id} in room ${roomId}`);
+      logger.debug(`🗑️ Cancel vote from ${socket.id} in room ${roomId}`);
 
       const result = roomService.cancelVote(roomId, socket.id);
       if (result.error) {
-        console.log("❌ Voting not active or voter not found");
+        logger.debug("❌ Voting not active or voter not found");
         return;
       }
 
@@ -313,6 +322,39 @@ function registerSocketHandlers(
 
       socket.emit("vote-cancelled");
     });
+
+    // Общая логика для "игрок окончательно ушёл из комнаты" — вызывается
+    // и сразу при disconnect в лобби, и по истечении грейс-периода во
+    // время активного раунда.
+    function finalizePlayerRemoval(roomId, room) {
+      if (room.players.size === 0 && room.status === "waiting") {
+        logger.debug(`⏰ Scheduling room deletion in 5 seconds: ${roomId}`);
+        setTimeout(() => {
+          if (roomService.deleteRoomIfEmpty(roomId)) {
+            logger.debug(`🏁 Deleting empty room: ${roomId}`);
+          }
+        }, 5000);
+        return;
+      }
+
+      if (room.players.size > 0) {
+        io.to(roomId).emit("room-info", roomService.getRoomInfo(room));
+
+        // Если ушедший был последним, кто не проголосовал — голосование
+        // теперь должно завершиться само.
+        if (
+          room.voting &&
+          Array.from(room.players.values()).every((p) => p.hasVoted)
+        ) {
+          logger.debug(
+            `🏁 All remaining players voted after a disconnect in room ${roomId}`
+          );
+          setTimeout(() => {
+            gameService.showVotingResults(roomId);
+          }, 1000);
+        }
+      }
+    }
   });
 }
 

@@ -3,13 +3,9 @@ const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
 
+const logger = require("./utils/logger");
 const SoundScanner = require("./utils/soundScanner");
-const {
-  MAX_PLAYERS,
-  ROUND_DURATION,
-  PREPARE_TIME,
-  ROOM_ID_LENGTH,
-} = require("./config/constants");
+const { PREPARE_TIME, ROOM_ID_LENGTH } = require("./config/constants");
 
 const { createRoomService } = require("./server/services/roomService");
 const { createGameService } = require("./server/services/gameService");
@@ -38,20 +34,18 @@ app.get("/room/:roomId", (req, res) => {
   res.sendFile(path.join(__dirname, "views", "room.html"));
 });
 
-// Сервисы: roomService хранит комнаты/игроков и меняет их состояние,
-// gameService управляет ходом раунда (старт игры, голосование, результаты).
+// Кол-во игроков и длительность раунда теперь настраиваются хостом за
+// комнату (см. server/schemas/validation.js), поэтому roomService/
+// gameService больше не принимают их как глобальные константы —
+// только то, что действительно одинаково для всех комнат.
 const roomService = createRoomService(io, {
-  maxPlayers: MAX_PLAYERS,
   roomIdLength: ROOM_ID_LENGTH,
 });
 
 const gameService = createGameService(io, roomService, soundScanner, {
   PREPARE_TIME,
-  ROUND_DURATION,
 });
 
-// Защита от подбора 4-символьного пароля комнаты: не более 10 попыток
-// join-room за 10 секунд с одного сокета.
 const joinRateLimiter = createRateLimiter(10, 10000);
 
 registerSocketHandlers(io, {
@@ -63,8 +57,8 @@ registerSocketHandlers(io, {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log("🔊 Available sounds:", {
+  logger.debug(`🚀 Server running on port ${PORT}`);
+  logger.debug("🔊 Available sounds:", {
     impostor: soundScanner.sounds.impostor.length,
     crewmate: soundScanner.sounds.crewmate.length,
     countdown: !!soundScanner.sounds.countdown,
@@ -72,7 +66,7 @@ server.listen(PORT, () => {
   });
 
   if (!soundScanner.hasSounds()) {
-    console.warn(
+    logger.warn(
       "⚠️ WARNING: No sounds found! Please add sound files to public/sounds/ folders"
     );
   }

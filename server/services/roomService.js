@@ -1,18 +1,27 @@
+const logger = require("../../utils/logger");
 const {
   sanitizePlayerName,
   sanitizeSessionId,
+  sanitizeMaxPlayers,
+  sanitizeRoundDurationMs,
 } = require("../schemas/validation");
+
+// Сколько ждать переподключения игрока, если он отвалился во время
+// активного раунда (подготовка/музыка/голосование), прежде чем убрать
+// его насовсем. В лобби ("waiting" и не идёт голосование) ждать нет
+// смысла — там потеря состояния ничем не грозит, убираем сразу.
+const DISCONNECT_GRACE_MS = 20000;
 
 // Вся работа с комнатами и игроками живёт здесь, в памяти процесса (Map),
 // без единого socket.io emit — сервис только меняет состояние и
 // возвращает структурированный результат, а что и кому отправить,
 // решает вызывающий код (socketController).
 //
-// `io` нужен сервису только для одной вещи: если "призрачный" сокет
+// `io` нужен сервису для двух вещей: (1) если "призрачный" сокет
 // человека, который уже открыл комнату под новым соединением, ещё
-// технически жив, мы выводим его из комнаты socket.io (см.
-// removeStaleSessionPlayers) — но самих событий сервис не шлёт.
-function createRoomService(io, { maxPlayers, roomIdLength }) {
+// технически жив, мы выводим его из комнаты socket.io; (2) не более —
+// самих событий сервис не шлёт.
+function createRoomService(io, { roomIdLength }) {
   const rooms = new Map(); // roomId -> room
   const socketToRoom = new Map(); // socket.id -> roomId
 
@@ -41,12 +50,22 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
       role: "crewmate",
       hasVoted: false,
       votedFor: null,
+      connected: true,
+      disconnectTimer: null,
     };
   }
 
-  // Один игрок в виде, безопасном для отправки клиентам: sessionId —
-  // внутренний технический идентификатор, его не должны видеть другие игроки.
-  function toPublicPlayer(player) {
+  function clearDisconnectTimer(player) {
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
+  }
+
+  // Игрок в виде, безопасном для отправки клиентам: sessionId и
+  // disconnectTimer — внутренние технические детали, их не должны
+  // видеть другие игроки.
+  function toPublicPlayer(player, room) {
     if (!player) return null;
     return {
       id: player.id,
@@ -55,11 +74,19 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
       role: player.role,
       hasVoted: player.hasVoted,
       votedFor: player.votedFor,
+      connected: player.connected !== false,
+      isHost: !!(
+        room &&
+        player.sessionId &&
+        room.hostSessionId === player.sessionId
+      ),
     };
   }
 
   function getPublicPlayers(room) {
-    return Array.from(room.players.values()).map(toPublicPlayer);
+    return Array.from(room.players.values()).map((p) =>
+      toPublicPlayer(p, room)
+    );
   }
 
   function getVotedPlayersSummary(room) {
@@ -76,57 +103,102 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
       readyCount: room.readyCount,
       voting: room.voting,
       votes: room.votes,
-      maxPlayers,
+      maxPlayers: room.maxPlayers,
+      roundDuration: room.roundDuration,
     };
   }
 
-  // --- Дедупликация игроков при переходе index.html -> room.html ---
+  // Раунд считается "активным", если прерывать его потерей игрока
+  // нежелательно: идёт подготовка/музыка или голосование. Обратите
+  // внимание, что во время голосования room.status всё ещё "waiting"
+  // (так было устроено изначально) — поэтому проверяем ещё и room.voting.
+  function isRoundActive(room) {
+    return (
+      room.status === "preparing" || room.status === "playing" || room.voting
+    );
+  }
+
+  // --- Дедупликация / переподключение игроков ---
   //
   // Клиент использует ДВА разных socket.io-соединения: одно на главной
   // странице (создание/подключение к комнате) и новое — на странице
-  // комнаты (identify-room). Когда браузер переходит по ссылке, старое
-  // соединение закрывается не мгновенно (иногда сервер узнаёт о разрыве
-  // только через несколько секунд), а новое уже успевает представиться
-  // в той же комнате. Из-за этого один и тот же человек на короткое
-  // (а иногда и не очень) время виден как два игрока с одинаковым именем.
+  // комнаты (identify-room). Кроме того, во время игры у человека может
+  // просто моргнуть связь, и socket.io переподключится под новым
+  // socket.id. В обоих случаях клиент присылает один и тот же постоянный
+  // на вкладку "sessionId" (хранится в sessionStorage).
   //
-  // Клиент передаёт "sessionId" — один раз сгенерированный идентификатор
-  // вкладки (хранится в sessionStorage) — во всех запросах
-  // create-room/join-room/identify-room. Перед тем как добавить игрока
-  // под новым socket.id, мы удаляем из комнаты любую "устаревшую" запись
-  // с тем же sessionId.
-  function removeStaleSessionPlayers(room, sessionId, excludeSocketId) {
-    if (!room || !sessionId) return;
+  // Раньше в этой ситуации старая запись просто удалялась, а взамен
+  // создавалась новая — это решало проблему дублей в лобби, но во время
+  // игры стирало роль игрока, его голос и статус готовности. Теперь мы
+  // "переносим" существующего игрока на новый socket.id, сохраняя всё
+  // его состояние, и поправляем ссылки на старый id (кто предатель, кто
+  // за кого проголосовал), которые иначе указывали бы в никуда.
+  function reclaimStalePlayer(room, sessionId, newSocketId, playerName) {
+    if (!sessionId) return null;
 
-    for (const [existingSocketId, existingPlayer] of room.players.entries()) {
-      if (
-        existingSocketId !== excludeSocketId &&
-        existingPlayer.sessionId === sessionId
-      ) {
-        console.log(
-          `♻️ Removing stale duplicate of ${existingPlayer.name} (old socket ${existingSocketId})`
-        );
+    for (const [oldSocketId, existingPlayer] of room.players.entries()) {
+      if (oldSocketId === newSocketId) continue;
+      if (existingPlayer.sessionId !== sessionId) continue;
 
-        if (existingPlayer.isReady && room.readyCount > 0) {
-          room.readyCount--;
-        }
+      logger.debug(
+        `♻️ Reclaiming session for ${existingPlayer.name}: ${oldSocketId} -> ${newSocketId}`
+      );
 
-        room.players.delete(existingSocketId);
-        socketToRoom.delete(existingSocketId);
+      clearDisconnectTimer(existingPlayer);
 
-        // Если старый сокет ещё технически жив (не успел разорваться),
-        // выводим его из комнаты socket.io, чтобы он не получал её события.
-        const staleSocket = io.sockets.sockets.get(existingSocketId);
-        if (staleSocket) {
-          staleSocket.leave(room.id);
-        }
+      // Переносим ссылки на старый socket.id (роль предателя, чужие
+      // голоса "за" этого игрока), иначе они будут указывать в никуда.
+      if (room.impostor === oldSocketId) {
+        room.impostor = newSocketId;
       }
+      if (
+        room.votes &&
+        Object.prototype.hasOwnProperty.call(room.votes, oldSocketId)
+      ) {
+        room.votes[newSocketId] =
+          (room.votes[newSocketId] || 0) + room.votes[oldSocketId];
+        delete room.votes[oldSocketId];
+      }
+      room.players.forEach((p) => {
+        if (p.votedFor === oldSocketId) {
+          p.votedFor = newSocketId;
+        }
+      });
+
+      room.players.delete(oldSocketId);
+      socketToRoom.delete(oldSocketId);
+
+      // Если старый сокет ещё технически жив (не успел разорваться),
+      // выводим его из комнаты socket.io, чтобы он не получал её события.
+      const staleSocket = io.sockets.sockets.get(oldSocketId);
+      if (staleSocket) {
+        staleSocket.leave(room.id);
+      }
+
+      existingPlayer.id = newSocketId;
+      existingPlayer.connected = true;
+      if (playerName) {
+        existingPlayer.name = playerName;
+      }
+
+      room.players.set(newSocketId, existingPlayer);
+      return existingPlayer;
     }
+
+    return null;
   }
 
-  function createRoom(socketId, rawPlayerName, rawSessionId) {
+  function createRoom(
+    socketId,
+    rawPlayerName,
+    rawSessionId,
+    rawMaxPlayers,
+    rawRoundDurationSeconds
+  ) {
     const playerName = sanitizePlayerName(rawPlayerName);
     const sessionId = sanitizeSessionId(rawSessionId);
+    const maxPlayers = sanitizeMaxPlayers(rawMaxPlayers);
+    const roundDuration = sanitizeRoundDurationMs(rawRoundDurationSeconds);
 
     const roomId = generateRoomId();
     const password = generatePassword();
@@ -142,6 +214,10 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
       votes: {},
       createdAt: Date.now(),
       maxPlayers,
+      roundDuration,
+      // Хост — создатель комнаты, определяется по sessionId (а не
+      // socket.id, который меняется при переходе на страницу комнаты).
+      hostSessionId: sessionId,
     };
 
     const player = createPlayer(socketId, sessionId, playerName || "Player1");
@@ -169,23 +245,22 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
     if (!room) {
       return { error: "not_found" };
     }
-    if (room.players.size >= maxPlayers) {
+    if (room.players.size >= room.maxPlayers) {
       return { error: "full" };
     }
     if (room.status !== "waiting") {
       return { error: "started" };
     }
 
-    // На случай повторного join-room тем же сокетом (двойной клик) —
-    // убираем возможный дубль по sessionId перед добавлением.
-    removeStaleSessionPlayers(room, sessionId, socketId);
-
-    const player = createPlayer(
-      socketId,
-      sessionId,
-      playerName || `Player${room.players.size + 1}`
-    );
-    room.players.set(socketId, player);
+    let player = reclaimStalePlayer(room, sessionId, socketId, playerName);
+    if (!player) {
+      player = createPlayer(
+        socketId,
+        sessionId,
+        playerName || `Player${room.players.size + 1}`
+      );
+      room.players.set(socketId, player);
+    }
     socketToRoom.set(socketId, roomId);
 
     return { roomId, room, player };
@@ -201,17 +276,15 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
     let player = room.players.get(socketId);
 
     if (!player) {
-      // Убираем "призрачную" запись этого же человека под старым
-      // socket.id, чтобы не получить дубликат при переходе с главной
-      // страницы в комнату.
-      removeStaleSessionPlayers(room, sessionId, socketId);
-
-      player = createPlayer(
-        socketId,
-        sessionId,
-        playerName || `Player${room.players.size + 1}`
-      );
-      room.players.set(socketId, player);
+      player = reclaimStalePlayer(room, sessionId, socketId, playerName);
+      if (!player) {
+        player = createPlayer(
+          socketId,
+          sessionId,
+          playerName || `Player${room.players.size + 1}`
+        );
+        room.players.set(socketId, player);
+      }
     } else {
       if (playerName && player.name !== playerName) {
         player.name = playerName;
@@ -301,21 +374,52 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
     return { room, votedPlayers: getVotedPlayersSummary(room) };
   }
 
-  function removePlayerBySocket(socketId) {
+  // Обрабатывает disconnect сокета. В лобби убираем игрока сразу (как и
+  // раньше) — там терять нечего. Во время активного раунда/голосования
+  // даём DISCONNECT_GRACE_MS на переподключение (обрыв связи, обновление
+  // страницы): игрок помечается connected:false, но остаётся в комнате
+  // со своей ролью/голосом/готовностью. Если он не вернётся вовремя —
+  // удаляем насовсем и зовём onGraceExpired, чтобы вызывающий код
+  // (socketController) разослал обновлённое состояние и проверил,
+  // например, не завершилось ли теперь голосование.
+  function handleDisconnect(socketId, onGraceExpired) {
     const roomId = socketToRoom.get(socketId);
+    socketToRoom.delete(socketId);
     if (!roomId) return null;
 
     const room = rooms.get(roomId);
-    if (!room || !room.players.has(socketId)) return null;
+    if (!room) return null;
 
     const player = room.players.get(socketId);
-    if (player.isReady && room.readyCount > 0) {
-      room.readyCount--;
-    }
-    room.players.delete(socketId);
-    socketToRoom.delete(socketId);
+    if (!player) return null;
 
-    return { roomId, room, player };
+    if (!isRoundActive(room)) {
+      if (player.isReady && room.readyCount > 0) {
+        room.readyCount--;
+      }
+      room.players.delete(socketId);
+      return { roomId, room, player, permanentlyRemoved: true };
+    }
+
+    logger.debug(
+      `⏳ ${player.name} disconnected during an active round — waiting ${DISCONNECT_GRACE_MS}ms for reconnect`
+    );
+    player.connected = false;
+    player.disconnectTimer = setTimeout(() => {
+      const stillSamePlayer = room.players.get(socketId) === player;
+      if (stillSamePlayer && !player.connected) {
+        logger.debug(`🚪 ${player.name} did not reconnect in time — removing`);
+        if (player.isReady && room.readyCount > 0) {
+          room.readyCount--;
+        }
+        room.players.delete(socketId);
+        if (typeof onGraceExpired === "function") {
+          onGraceExpired({ roomId, room, player });
+        }
+      }
+    }, DISCONNECT_GRACE_MS);
+
+    return { roomId, room, player, permanentlyRemoved: false };
   }
 
   function deleteRoomIfEmpty(roomId) {
@@ -339,7 +443,7 @@ function createRoomService(io, { maxPlayers, roomIdLength }) {
     setPlayerReady,
     recordVote,
     cancelVote,
-    removePlayerBySocket,
+    handleDisconnect,
     deleteRoomIfEmpty,
   };
 }

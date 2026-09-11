@@ -136,6 +136,42 @@ h1 {
   display: none !important;
 }
 
+.room-settings {
+  margin: 15px 0;
+  text-align: left;
+}
+
+.room-settings label {
+  display: block;
+  font-size: 0.9em;
+  margin: 12px 0 4px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.room-settings input[type="range"] {
+  width: 100%;
+  cursor: pointer;
+  accent-color: #4caf50;
+}
+
+.player-host-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 0.85em;
+  color: #ffd700;
+}
+
+.player-item.player-disconnected {
+  opacity: 0.55;
+  border-left-color: #f44336 !important;
+}
+
+.player-reconnecting {
+  color: #f44336;
+  font-size: 0.85em;
+  font-style: italic;
+}
+
 .room-header {
   display: flex;
   flex-direction: column;

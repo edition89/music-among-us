@@ -1,4 +1,12 @@
-const { ROOM_ID_LENGTH } = require("../../config/constants");
+const {
+  ROOM_ID_LENGTH,
+  MIN_PLAYERS,
+  MAX_PLAYERS_LIMIT,
+  DEFAULT_MAX_PLAYERS,
+  MIN_ROUND_DURATION,
+  MAX_ROUND_DURATION,
+  DEFAULT_ROUND_DURATION,
+} = require("../../config/constants");
 
 const MAX_NAME_LENGTH = 15;
 const ROOM_PASSWORD_PATTERN = /^[A-Z0-9]{4}$/;
@@ -37,10 +45,38 @@ function isValidRoomPassword(password) {
   return typeof password === "string" && ROOM_PASSWORD_PATTERN.test(password);
 }
 
+// Настройки комнаты, которые задаёт хост при создании (кол-во игроков,
+// длительность раунда). Некорректный/отсутствующий ввод не отклоняем —
+// просто прижимаем к границам или подставляем значение по умолчанию,
+// чтобы кривое значение с клиента не могло сломать сервер.
+function sanitizeMaxPlayers(rawValue) {
+  const n = Number(rawValue);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_PLAYERS;
+  const rounded = Math.round(n);
+  return Math.min(MAX_PLAYERS_LIMIT, Math.max(MIN_PLAYERS, rounded));
+}
+
+// rawSeconds — длительность раунда в секундах (как её вводит пользователь
+// в форме), возвращаем миллисекунды для внутреннего использования.
+function sanitizeRoundDurationMs(rawSeconds) {
+  const n = Number(rawSeconds);
+  if (!Number.isFinite(n)) return DEFAULT_ROUND_DURATION;
+  const roundedSeconds = Math.round(n);
+  const minSeconds = MIN_ROUND_DURATION / 1000;
+  const maxSeconds = MAX_ROUND_DURATION / 1000;
+  const clampedSeconds = Math.min(
+    maxSeconds,
+    Math.max(minSeconds, roundedSeconds)
+  );
+  return clampedSeconds * 1000;
+}
+
 module.exports = {
   MAX_NAME_LENGTH,
   sanitizePlayerName,
   sanitizeSessionId,
   isValidRoomId,
   isValidRoomPassword,
+  sanitizeMaxPlayers,
+  sanitizeRoundDurationMs,
 };

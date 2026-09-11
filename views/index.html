@@ -22,6 +22,17 @@
                 <div id="createRoomForm" class="form-container hidden">
                     <h3>Создание комнаты</h3>
                     <input type="text" id="playerNameCreate" placeholder="Ваше имя" maxlength="15" required>
+
+                    <div class="room-settings">
+                        <label for="maxPlayersInput">Макс. игроков: <span
+                                id="maxPlayersValue">6</span></label>
+                        <input type="range" id="maxPlayersInput" min="3" max="10" step="1" value="6">
+
+                        <label for="roundDurationInput">Длительность раунда: <span
+                                id="roundDurationValue">30</span> сек.</label>
+                        <input type="range" id="roundDurationInput" min="10" max="30" step="1" value="30">
+                    </div>
+
                     <button id="createRoomConfirm" class="btn btn-primary">Создать комнату</button>
                 </div>
 

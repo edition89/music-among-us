@@ -62,6 +62,15 @@ document.addEventListener("DOMContentLoaded", () => {
     }, delay);
   });
 
+  // Переподключение (обрыв связи, а не только первая загрузка страницы):
+  // socket.io сам восстанавливает соединение под новым socket.id, но
+  // серверу нужно заново сказать, в какой комнате мы находимся, иначе
+  // мы останемся отвязаны от неё до истечения грейс-периода.
+  socket.on("connect", () => {
+    console.log("🔌 Socket (re)connected, re-identifying with room:", roomId);
+    socket.emit("identify-room", { roomId, playerName, sessionId });
+  });
+
   // Периодически запрашиваем обновление информации о комнате
   const intervalId = setInterval(() => {
     socket.emit("get-room-info", { roomId });
@@ -399,11 +408,21 @@ function updatePlayersList(players) {
   players.forEach((player) => {
     const statusClass = player.isReady ? "player-ready" : "player-not-ready";
     const statusText = player.isReady ? "✅ Готов" : "⏳ Ожидание";
+    const hostBadge = player.isHost
+      ? '<span class="player-host-badge" title="Хост комнаты">👑</span>'
+      : "";
+    const isDisconnected = player.connected === false;
+    const itemClass = isDisconnected
+      ? "player-item player-disconnected"
+      : "player-item";
+    const statusHtml = isDisconnected
+      ? '<span class="player-reconnecting">🔌 Переподключение...</span>'
+      : `<span class="${statusClass}">${statusText}</span>`;
 
     html += `
-            <div class="player-item">
-                <span style="font-weight: bold;">${escapeHtml(player.name)}</span>
-                <span class="${statusClass}">${statusText}</span>
+            <div class="${itemClass}">
+                <span style="font-weight: bold;">${escapeHtml(player.name)}${hostBadge}</span>
+                ${statusHtml}
             </div>
         `;
   });

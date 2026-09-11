@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const logger = require("./logger");
 const { SOUNDS_FOLDER } = require("../config/constants");
 
 class SoundScanner {
@@ -46,14 +47,14 @@ class SoundScanner {
         this.sounds.roundEnd = "/sounds/round-end.mp3";
       }
 
-      console.log("🔊 Found sounds:", {
+      logger.debug("🔊 Found sounds:", {
         impostor: this.sounds.impostor.length,
         crewmate: this.sounds.crewmate.length,
         countdown: !!this.sounds.countdown,
         roundEnd: !!this.sounds.roundEnd,
       });
     } catch (error) {
-      console.error("❌ Error scanning sounds:", error);
+      logger.error("❌ Error scanning sounds:", error);
     }
   }
 

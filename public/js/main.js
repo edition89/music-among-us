@@ -27,6 +27,23 @@ document.getElementById("joinRoomBtn").addEventListener("click", () => {
   document.getElementById("joinRoomPassword").focus();
 });
 
+// Живое обновление подписей у ползунков настроек комнаты
+const maxPlayersInput = document.getElementById("maxPlayersInput");
+const maxPlayersValue = document.getElementById("maxPlayersValue");
+const roundDurationInput = document.getElementById("roundDurationInput");
+const roundDurationValue = document.getElementById("roundDurationValue");
+
+if (maxPlayersInput) {
+  maxPlayersInput.addEventListener("input", () => {
+    maxPlayersValue.textContent = maxPlayersInput.value;
+  });
+}
+if (roundDurationInput) {
+  roundDurationInput.addEventListener("input", () => {
+    roundDurationValue.textContent = roundDurationInput.value;
+  });
+}
+
 document.getElementById("createRoomConfirm").addEventListener("click", () => {
   const playerName = document.getElementById("playerNameCreate").value.trim();
 
@@ -38,10 +55,24 @@ document.getElementById("createRoomConfirm").addEventListener("click", () => {
   // Сохраняем имя в sessionStorage
   sessionStorage.setItem("playerName", playerName);
 
-  console.log("🎮 Creating room for player:", playerName);
+  const maxPlayers = maxPlayersInput ? Number(maxPlayersInput.value) : undefined;
+  const roundDuration = roundDurationInput
+    ? Number(roundDurationInput.value)
+    : undefined;
+
+  console.log(
+    "🎮 Creating room for player:",
+    playerName,
+    "maxPlayers:",
+    maxPlayers,
+    "roundDuration:",
+    roundDuration
+  );
   socket.emit("create-room", {
     playerName,
     sessionId: getOrCreatePlayerSessionId(),
+    maxPlayers,
+    roundDuration,
   });
 });
 
